@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>رحلات | نظام شاشات معلومات الرحلة للحافلات</title>
+<meta name="description" content="نظام إدخال معلومات الرحلة وعرضها مباشرة على شاشات الحافلات.">
+<meta name="theme-color" content="#0f172a">
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+tailwind.config = { theme: { extend: {
+  colors: {
+    brand: { 50:'#eff6ff', 100:'#dbeafe', 200:'#bfdbfe', 500:'#2563eb', 600:'#1d4ed8', 700:'#1e40af', 900:'#172554' },
+    ink: { 900:'#0f172a', 800:'#1e293b', 700:'#334155', 500:'#64748b', 400:'#94a3b8', 300:'#cbd5e1', 200:'#e2e8f0', 100:'#f1f5f9', 50:'#f8fafc' }
+  },
+  fontFamily: { sans: ['"IBM Plex Sans Arabic"', 'sans-serif'] }
+} } }
+</script>
+<style>
+  body { -webkit-tap-highlight-color: transparent; }
+  .fade-in { animation: fade .25s ease both; } @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  :focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
+  .field label { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; font-weight: 600; color: #334155; margin-bottom: 6px; }
+  .field label .en { direction: ltr; color: #64748b; font-weight: 500; }
+  .inp { width: 100%; background: #fff; border: 1.5px solid #e2e8f0; border-radius: 12px; padding: 10px 12px; font-size: 14px; transition: border-color .15s; }
+  .inp:focus { outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px #dbeafe; }
+  .inp.err { border-color: #dc2626; }
+  .dt { display: flex; align-items: center; padding: 0; overflow: hidden; }
+  .dt:focus-within { border-color: #2563eb; box-shadow: 0 0 0 3px #dbeafe; }
+  .dt input { border: 0; outline: none; background: transparent; padding: 10px 12px; font-size: 14px; min-width: 0; }
+  .dt .sep { width: 1px; align-self: stretch; margin: 8px 0; background: #e2e8f0; }
+  .no-scrollbar::-webkit-scrollbar { display: none; } .no-scrollbar { scrollbar-width: none; }
+  /* ===== Bus screen: fixed 1600x900 canvas scaled to any display ===== */
+  #screenWrap { position: fixed; inset: 0; background: #05070c; display: none; align-items: center; justify-content: center; overflow: hidden; z-index: 40; }
+  #stage { width: 1600px; height: 900px; transform-origin: center center; position: relative; flex-shrink: 0; }
+  .scr { width: 100%; height: 100%; border-radius: 26px; overflow: hidden; position: relative;
+    background: linear-gradient(180deg, #e9edf2 0%, #d7dde5 100%); color: #0f172a; font-family: 'IBM Plex Sans Arabic', sans-serif; }
+  .scr .lbl-en { direction: ltr; font-weight: 600; color: #475569; }
+  .scr .lbl-ar { font-weight: 600; color: #475569; }
+  .leaflet-container { background: #dbe4ee; font-family: inherit; }
+  .leaflet-control-attribution { font-size: 9px !important; }
+  .ring-track { stroke: #e2e8f0; } .ring-fill { transition: stroke-dashoffset 1s linear; }
+  .ticker { white-space: nowrap; animation: tick 28s linear infinite; }
+  @keyframes tick { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+  .pulse-dot { animation: pd 1.6s ease-in-out infinite; } @keyframes pd { 50% { opacity: .35; } }
+</style>
+</head>
+<body class="bg-ink-50 text-ink-900 font-sans antialiased">
+
+<!-- ================= ADMIN APP ================= -->
+<div id="app">
+  <div id="ownerBar" class="hidden bg-amber-300 text-ink-900 text-xs font-bold">
+    <div class="max-w-7xl mx-auto px-4 py-2 flex items-center gap-2"><i class="fa-solid fa-user-shield"></i><span id="ownerBarTxt" class="truncate"></span><span class="flex-1"></span>
+      <button data-action="exit-company" class="shrink-0 px-2.5 py-1 rounded-lg bg-ink-900 text-white"><i class="fa-solid fa-arrow-right ml-1"></i>لوحة المنصة</button></div>
+  </div>
+  <header id="hdr" class="sticky top-0 z-30 bg-white/95 backdrop-blur border-b border-ink-200">
+    <div class="max-w-7xl mx-auto px-4 h-16 flex items-center gap-3">
+      <a id="hdrHome" href="#/" class="flex items-center gap-2.5 min-w-0">
+        <span id="hdrLogo" class="w-10 h-10 shrink-0 rounded-xl bg-ink-900 text-white flex items-center justify-center overflow-hidden"><i class="fa-solid fa-bus"></i></span>
+        <span class="leading-tight min-w-0"><span id="hdrName" class="block font-bold text-sm truncate"></span><span id="hdrSub" class="block text-[11px] text-ink-500 truncate">لوحة إدارة شاشات الرحلات</span></span>
+      </a>
+      <span class="flex-1"></span>
+      <span class="hidden md:inline-flex items-center gap-2 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-lg font-semibold"><span class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span>متصل — التحديث فوري</span>
+      <button id="btnSettings" data-action="settings" class="w-10 h-10 shrink-0 rounded-xl border border-ink-200 hover:border-brand-500 text-ink-700" aria-label="إعدادات الشركة" title="إعدادات الشركة"><i class="fa-solid fa-gear"></i></button>
+      <button data-action="logout" class="h-10 px-3 shrink-0 rounded-xl border border-ink-200 hover:border-red-400 hover:text-red-600 text-ink-700 text-sm font-semibold" title="تسجيل الخروج"><i class="fa-solid fa-arrow-right-from-bracket"></i><span class="hidden sm:inline mr-1.5">خروج</span></button>
+    </div>
+  </header>
+  <main id="view" class="max-w-7xl mx-auto px-4 py-6"></main>
+</div>
+
+<!-- ================= BUS SCREEN ================= -->
+<div id="screenWrap"><div id="stage"></div>
+  <div id="scrTools" class="fixed top-3 left-3 z-50 flex gap-2 transition-opacity">
+    <a href="#/" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-sm backdrop-blur"><i class="fa-solid fa-arrow-right ml-1.5"></i>لوحة الإدارة</a>
+    <button data-action="fullscreen" class="px-3 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-sm backdrop-blur"><i class="fa-solid fa-expand ml-1.5"></i>ملء الشاشة</button>
+  </div>
+</div>
+
+<!-- Modal -->
+<div id="modal" class="fixed inset-0 z-50 hidden items-center justify-center p-4">
+  <div class="absolute inset-0 bg-ink-900/50" data-action="close-modal"></div>
+  <div id="modalBox" class="relative bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 fade-in"></div>
+</div>
+<div id="toast" class="fixed z-[70] top-4 left-1/2 -translate-x-1/2 bg-ink-900 text-white text-sm font-medium px-4 py-3 rounded-xl shadow-2xl opacity-0 pointer-events-none transition-opacity duration-300 flex items-center gap-2 whitespace-nowrap"></div>
+
+<script>
+/* =====================================================================
+   رحلات — Trip information system for bus passenger screens (demo)
+   - Admin page: bilingual form per vehicle (as the client's mock-up).
+   - Screen page: 16:9 passenger display per vehicle (#/screen/<code>),
+     auto-scaled to any screen, live-updated when admin presses Update
+     (cross-tab sync via storage events + BroadcastChannel in this demo;
+     production uses a realtime database so updates reach every bus).
+   - Countdown is computed on the screen itself → keeps running offline.
+   ===================================================================== */
+
+/* ---------------- REFERENCE DATA ---------------- */
+const CITIES = {
+  jeddah:  { ar:'جدة',            en:'Jeddah',   ll:[21.4858, 39.1925] },
+  makkah:  { ar:'مكة المكرمة',    en:'Makkah',   ll:[21.3891, 39.8579] },
+  madinah: { ar:'المدينة المنورة', en:'Madinah',  ll:[24.5247, 39.5692] },
+  riyadh:  { ar:'الرياض',         en:'Riyadh',   ll:[24.7136, 46.6753] },
+  dammam:  { ar:'الدمام',         en:'Dammam',   ll:[26.4207, 50.0888] },
+  abha:    { ar:'أبها',           en:'Abha',     ll:[18.2465, 42.5117] },
+  jazan:   { ar:'جازان',          en:'Jazan',    ll:[16.8892, 42.5511] },
+  sanaa:   { ar:'صنعاء',          en:'Sanaa',    ll:[15.3694, 44.1910] },
+  aden:    { ar:'عدن',            en:'Aden',     ll:[12.7855, 45.0187] },
+  taiz:    { ar:'تعز',            en:'Taiz',     ll:[13.5795, 44.0209] },
+  hodeidah:{ ar:'الحديدة',        en:'Hodeidah', ll:[14.7978, 42.9545] },
+  marib:   { ar:'مأرب',           en:'Marib',    ll:[15.4590, 45.3253] },
+};
+// intermediate waypoints so routes follow the coast/highways instead of straight lines
+const VIA = {
+  'jeddah-sanaa': ['makkah', 'abha', 'jazan'], 'riyadh-aden': ['abha', 'sanaa', 'taiz'],
+  'jeddah-aden': ['abha', 'jazan', 'hodeidah', 'taiz'], 'makkah-sanaa': ['abha', 'jazan'],
+  'riyadh-sanaa': ['abha'], 'jeddah-madinah': [], 'makkah-madinah': [], 'dammam-riyadh': [],
+};
+
+/* ---------------- HELPERS ---------------- */
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { toast('تعذر الحفظ: مساحة التخزين ممتلئة', 'fa-triangle-exclamation', 'text-red-300'); } }
+};
+const pad = n => String(n).padStart(2, '0');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+const toLocal = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const toTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const at = (date, time) => new Date(`${date}T${time || '00:00'}`);
+function hm(ms) { const m = Math.max(0, Math.round(ms / 6e4)); return `${pad(Math.floor(m / 60))}:${pad(m % 60)}`; }
+function hms(ms) { const s = Math.max(0, Math.floor(ms / 1e3)); return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}`; }
+function toast(msg, icon = 'fa-circle-check', color = 'text-emerald-400') {
+  const t = $('#toast'); t.innerHTML = `<i class="fa-solid ${icon} ${color}"></i><span>${msg}</span>`;
+  t.style.opacity = 1; clearTimeout(t._h); t._h = setTimeout(() => t.style.opacity = 0, 2500);
+}
+const city = k => CITIES[k] || { ar: k, en: k, ll: null };
+
+/* ---------------- DATA ---------------- */
+function defaultLogo(c1 = '#d4a84f', c2 = '#a87b22', bg = '#0f172a') {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><rect width="120" height="120" rx="28" fill="${bg}"/><circle cx="60" cy="60" r="38" fill="url(#g)"/><path d="M38 70h44v8H38zM42 46h36a6 6 0 0 1 6 6v14H36V52a6 6 0 0 1 6-6z" fill="${bg}"/><circle cx="46" cy="80" r="5" fill="${bg}"/><circle cx="74" cy="80" r="5" fill="${bg}"/></svg>`;
+  return 'data:image/svg+xml;base64,' + btoa(svg);
+}
+const svgUri = s => 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(s)));
+const LOGOS = {
+  nukhba: svgUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs><linearGradient id="a" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#b8862b"/><stop offset=".55" stop-color="#e9c46a"/><stop offset="1" stop-color="#f6e0a0"/></linearGradient><linearGradient id="b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#13264d"/><stop offset="1" stop-color="#0a1630"/></linearGradient></defs><rect width="120" height="120" rx="26" fill="url(#b)"/><path d="M20 66C40 60 60 46 80 22C76 44 60 60 34 72Z" fill="url(#a)" opacity=".75"/><path d="M24 80C46 75 72 60 98 32C88 58 66 76 38 86Z" fill="url(#a)"/><path d="M30 94C54 91 78 80 100 56C90 78 70 92 44 99Z" fill="url(#a)" opacity=".85"/></svg>`),
+  salam: svgUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#10b981"/><stop offset="1" stop-color="#065f46"/></linearGradient></defs><rect width="120" height="120" rx="26" fill="url(#g)"/><circle cx="60" cy="38" r="15" fill="#fde68a"/><path d="M22 102Q50 70 56 44L64 44Q70 70 98 102Z" fill="#fff"/><path d="M60 50V58M60 66V76M60 84V98" stroke="#059669" stroke-width="3.5" stroke-linecap="round"/></svg>`),
+  aman: svgUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2563eb"/><stop offset="1" stop-color="#1e3a8a"/></linearGradient></defs><rect width="120" height="120" rx="26" fill="url(#g)"/><path d="M60 18L94 30V58C94 80 79 95 60 104C41 95 26 80 26 58V30Z" fill="#fff"/><path d="M60 26L86 35.5V58C86 75 75 87 60 95Z" fill="#dbeafe"/><path d="M44 60L56 72L78 46" fill="none" stroke="#1e3a8a" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/></svg>`),
+};
+function monogram(name) {
+  const word = String(name || '').replace(/^\s*(شركة|مؤسسة)\s+/, '').trim();
+  const ch = (word.replace(/^ال/, '')[0] || 'ش');
+  const pal = [['#7c3aed', '#4c1d95'], ['#e11d48', '#881337'], ['#ea580c', '#7c2d12'], ['#0891b2', '#164e63'], ['#4f46e5', '#312e81']];
+  const [c1, c2] = pal[[...word].reduce((s, c) => s + c.charCodeAt(0), 0) % pal.length];
+  return svgUri(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><rect width="120" height="120" rx="26" fill="url(#g)"/><circle cx="60" cy="60" r="38" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="3"/><text x="60" y="78" text-anchor="middle" font-family="Tahoma,Arial,sans-serif" font-size="52" font-weight="700" fill="#fff">${ch}</text></svg>`);
+}
+const PLATFORM = { ar: 'منصة رحلات', en: 'Rihla Platform', owner: { user: 'admin', pass: '1234' } };
+function seed() {
+  const now = new Date(), H = h => new Date(now.getTime() + h * 36e5);
+  const trip = (code, from, to, startH, durH, d1, d2, card, no, tel) => {
+    const s = H(startH), e = H(startH + durH);
+    return { code, from, to, fromDate: toLocal(s), fromTime: toTime(s), toDate: toLocal(e), toTime: toTime(e),
+      driverEn: d1[1], driverAr: d1[0], asstEn: d2[1], asstAr: d2[0], card, tripNo: no, contact: tel, periodic: 'no', updated: Date.now() };
+  };
+  const day = d => toLocal(new Date(now.getTime() - d * 864e5));
+  return { companies: [
+    { id:'nukhba', ar:'شركة النخبة للنقل الجماعي', en:'Al-Nukhba Passenger Transport', logo: LOGOS.nukhba, user:'nukhba', pass:'1234', active:true, since: day(140), vehicles: [
+      trip('236', 'jeddah', 'sanaa', -15.2, 50, ['عبد الرحمن سالم الغامدي', 'Abdulrahman Salem Al-Ghamdi'], ['رشيد محمد عبد الله محمود', 'Rashid Mohammed Abdullah Mahmoud'], '7150067820', 'TR-RK-25-1876', '0552614714'),
+      trip('525', 'riyadh', 'aden', -6, 38, ['خالد يوسف الحربي', 'Khalid Yousef Al-Harbi'], ['سعيد أحمد باوزير', 'Saeed Ahmed Bawazir'], '7150091144', 'TR-RA-25-2210', '0552614714'),
+      trip('118', 'makkah', 'madinah', 1.5, 5, ['فهد عبد العزيز الشهري', 'Fahad Abdulaziz Al-Shehri'], ['ماجد علي القحطاني', 'Majed Ali Al-Qahtani'], '7150033012', 'TR-MM-25-0417', '0552614714'),
+      trip('342', 'dammam', 'riyadh', -6.5, 4.5, ['ناصر حمد الدوسري', 'Nasser Hamad Al-Dosari'], ['تركي سعد العتيبي', 'Turki Saad Al-Otaibi'], '7150054478', 'TR-DR-25-0933', '0552614714'),
+    ] },
+    { id:'salam', ar:'شركة السلام للنقل البري', en:'Al-Salam Land Transport', logo: LOGOS.salam, user:'salam', pass:'1234', active:true, since: day(65), vehicles: [
+      trip('710', 'jeddah', 'aden', -10, 44, ['عمر حسن باعبود', 'Omar Hassan Baaboud'], ['ياسر صالح العمودي', 'Yasser Saleh Al-Amoudi'], '7150120077', 'SL-JA-25-0312', '0567781020'),
+      trip('714', 'riyadh', 'sanaa', 3, 30, ['منصور علي الزهراني', 'Mansour Ali Al-Zahrani'], ['هاني محمد الشريف', 'Hani Mohammed Al-Sharif'], '7150120081', 'SL-RS-25-0318', '0567781020'),
+    ] },
+    { id:'aman', ar:'شركة الأمان للرحلات', en:'Al-Aman Trips', logo: LOGOS.aman, user:'aman', pass:'1234', active:false, since: day(20), vehicles: [
+      trip('901', 'makkah', 'sanaa', -30, 26, ['صالح عبد الله المطيري', 'Saleh Abdullah Al-Mutairi'], ['بدر فهد السبيعي', 'Badr Fahad Al-Subaie'], '7150200155', 'AM-MS-25-0044', '0590012233'),
+    ] },
+  ] };
+}
+let db = store.get('rihla_db3', null);
+if (!db || !Array.isArray(db.companies)) { db = seed(); store.set('rihla_db3', db); }
+let session = store.get('rihla_session', null);
+const setSession = s => { session = s; store.set('rihla_session', s); };
+const company = id => db.companies.find(c => c.id === id);
+const cur = () => session && company(session.cid);
+const veh = (code, co = cur()) => co && co.vehicles.find(v => v.code === code);
+const screenUrl = (co, code) => `#/screen/${encodeURIComponent(co.id)}/${encodeURIComponent(code)}`;
+const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('rihla') : null;
+function save(code) { store.set('rihla_db3', db); if (bc) bc.postMessage({ code, t: Date.now() }); }
+
+function tripState(v, now = Date.now()) {
+  const s = at(v.fromDate, v.fromTime).getTime(), e = at(v.toDate, v.toTime).getTime();
+  if (!(e > s)) return { key:'invalid', s, e };
+  if (now < s) return { key:'scheduled', s, e, left: s - now };
+  if (now >= e) return { key:'arrived', s, e };
+  return { key:'enroute', s, e, left: e - now, pct: (now - s) / (e - s) };
+}
+const STATE_UI = {
+  scheduled: { ar:'لم تنطلق بعد', cls:'bg-amber-50 text-amber-800', icon:'fa-regular fa-clock' },
+  enroute:   { ar:'في الطريق',    cls:'bg-emerald-50 text-emerald-700', icon:'fa-solid fa-route' },
+  arrived:   { ar:'وصلت',         cls:'bg-ink-100 text-ink-700', icon:'fa-solid fa-flag-checkered' },
+  invalid:   { ar:'تواريخ غير صحيحة', cls:'bg-red-50 text-red-700', icon:'fa-solid fa-triangle-exclamation' },
+};
+
+/* ---------------- ROUTER ---------------- */
+function route(keepScroll) {
+  const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
+  const page = parts[0];
+  stopScreen();
+  if (page === 'screen') {
+    const co = company(parts[1]), v = co && veh(parts[2], co);
+    if (v) {
+      $('#app').style.display = 'none'; $('#screenWrap').style.display = 'flex';
+      document.title = `شاشة الحافلة ${v.code} — ${co.ar}`;
+      return startScreen(co.id, v.code);
+    }
+  }
+  $('#app').style.display = ''; $('#screenWrap').style.display = 'none';
+  document.title = 'منصة رحلات | إدارة شاشات معلومات الرحلة للحافلات';
+  if (!session) { renderChrome('login'); renderLogin(); }
+  else if (session.role === 'owner' && (!session.cid || page === 'admin')) { if (session.cid) setSession({ role: 'owner' }); renderChrome('owner'); renderAdmin(); }
+  else if (!cur() || (session.role === 'company' && !cur().active)) { setSession(null); return route(); }
+  else { renderChrome('company'); if (page === 'edit' && veh(parts[1])) renderEdit(parts[1]); else renderHome(); }
+  if (!keepScroll) window.scrollTo(0, 0);
+}
+window.addEventListener('hashchange', () => route());
+function renderChrome(mode) {
+  $('#hdr').style.display = mode === 'login' ? 'none' : '';
+  $('#btnSettings').style.display = mode === 'company' ? '' : 'none';
+  const ob = $('#ownerBar'), co = cur();
+  ob.classList.toggle('hidden', !(mode === 'company' && session.role === 'owner'));
+  if (mode === 'company') {
+    $('#ownerBarTxt').textContent = `أنت مالك المنصة وتتصفح لوحة: ${co.ar}`;
+    $('#hdrName').textContent = co.ar; $('#hdrSub').textContent = 'لوحة إدارة شاشات الرحلات'; $('#hdrHome').href = '#/';
+    $('#hdrLogo').innerHTML = co.logo ? `<img src="${co.logo}" alt="" class="w-full h-full object-cover">` : '<i class="fa-solid fa-bus"></i>';
+  } else if (mode === 'owner') {
+    $('#hdrName').textContent = PLATFORM.ar; $('#hdrSub').textContent = 'لوحة مالك المنصة'; $('#hdrHome').href = '#/admin';
+    $('#hdrLogo').innerHTML = '<i class="fa-solid fa-satellite-dish"></i>';
+  }
+}
+const renderHeader = () => renderChrome('company');
+
+/* ---------------- LOGIN ---------------- */
+function renderLogin(err) {
+  $('#view').innerHTML = `
+  <div class="min-h-[calc(100vh-3rem)] flex items-center justify-center fade-in">
+    <div class="w-full max-w-4xl grid md:grid-cols-2 bg-white rounded-3xl border border-ink-200 shadow-xl overflow-hidden">
+      <div class="bg-ink-900 text-white p-7 sm:p-9 relative overflow-hidden order-last md:order-none">
+        <img src="https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?auto=format&fit=crop&w=1200&q=70" alt="" loading="lazy" class="absolute inset-0 w-full h-full object-cover" onerror="this.remove()">
+        <div class="absolute inset-0 bg-gradient-to-t from-ink-900 via-ink-900/85 to-ink-900/55"></div>
+        <div class="relative">
+          <div class="w-12 h-12 rounded-2xl bg-brand-500 flex items-center justify-center text-xl mb-5"><i class="fa-solid fa-satellite-dish"></i></div>
+          <h1 class="text-2xl font-bold mb-2">${PLATFORM.ar}</h1>
+          <p class="text-ink-300 text-sm leading-7 mb-6">منصة سحابية لشركات النقل الجماعي: يُدخل مركز العمليات معلومات الرحلة، فتظهر فوراً على الشاشة داخل كل حافلة.</p>
+          <ul class="space-y-3 text-sm">
+            ${[['fa-building', 'كل شركة لها حساب مستقل وحافلات وشعار خاص بها'], ['fa-tv', 'لكل حافلة شاشة برابط ثابت، تُفتح مرة واحدة'], ['fa-bolt', 'تحديث فوري للشاشة عند الضغط على Update'], ['fa-user-shield', 'لوحة لمالك المنصة لإدارة جميع الشركات']].map(([i, s]) =>
+              `<li class="flex gap-3"><i class="fa-solid ${i} text-brand-200 mt-1 w-4"></i><span class="text-ink-100">${s}</span></li>`).join('')}
+          </ul>
+        </div>
+      </div>
+      <div class="p-7 sm:p-9">
+        <h2 class="text-xl font-bold mb-1">تسجيل الدخول</h2>
+        <p class="text-sm text-ink-500 mb-6">ادخل بحساب مالك المنصة أو بحساب شركة النقل.</p>
+        <form id="loginForm" class="space-y-4" novalidate>
+          <div class="field"><label for="lUser"><span>اسم المستخدم</span><span class="en">Username</span></label><input id="lUser" class="inp" dir="ltr" autocomplete="username"></div>
+          <div class="field"><label for="lPass"><span>كلمة المرور</span><span class="en">Password</span></label><input id="lPass" type="password" class="inp" dir="ltr" autocomplete="current-password"></div>
+          <p id="lErr" class="${err ? '' : 'hidden'} text-sm text-red-600 bg-red-50 rounded-xl px-3 py-2"><i class="fa-solid fa-circle-exclamation ml-1"></i><span>${esc(err || '')}</span></p>
+          <button class="w-full py-3 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-bold">دخول</button>
+        </form>
+        <div class="mt-7">
+          <div class="text-xs font-bold text-ink-500 mb-2">حسابات تجريبية — اضغط للدخول مباشرة</div>
+          <div class="grid gap-2">
+            <button data-action="demo-login" data-u="admin" class="flex items-center gap-3 p-3 rounded-xl border border-ink-200 hover:border-brand-500 hover:bg-brand-50 text-right">
+              <span class="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center"><i class="fa-solid fa-user-shield"></i></span>
+              <span class="flex-1"><b class="block text-sm">مالك المنصة</b><span class="text-xs text-ink-500">يدير كل الشركات المشتركة</span></span><span class="text-[11px] text-ink-400" dir="ltr">admin / 1234</span></button>
+            <button data-action="demo-login" data-u="nukhba" class="flex items-center gap-3 p-3 rounded-xl border border-ink-200 hover:border-brand-500 hover:bg-brand-50 text-right">
+              <img src="${company('nukhba')?.logo || LOGOS.nukhba}" alt="" class="w-10 h-10 rounded-xl object-cover">
+              <span class="flex-1"><b class="block text-sm">مركز عمليات شركة نقل</b><span class="text-xs text-ink-500">يدخل معلومات رحلات حافلاته</span></span><span class="text-[11px] text-ink-400" dir="ltr">nukhba / 1234</span></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+  $('#loginForm').onsubmit = e => { e.preventDefault(); login($('#lUser').value.trim(), $('#lPass').value); };
+}
+function login(u, p) {
+  const fail = m => { const el = $('#lErr'); if (el) { el.classList.remove('hidden'); el.querySelector('span').textContent = m; } };
+  if (!u || !p) return fail('أدخل اسم المستخدم وكلمة المرور');
+  if (u.toLowerCase() === PLATFORM.owner.user && p === PLATFORM.owner.pass) { setSession({ role: 'owner' }); location.hash = '#/admin'; route(); return toast('مرحباً بك في لوحة مالك المنصة', 'fa-user-shield'); }
+  const co = db.companies.find(c => c.user.toLowerCase() === u.toLowerCase());
+  if (!co || co.pass !== p) return fail('اسم المستخدم أو كلمة المرور غير صحيحة');
+  if (!co.active) return fail('حساب هذه الشركة موقوف. تواصل مع إدارة المنصة.');
+  setSession({ role: 'company', cid: co.id }); location.hash = '#/'; route(); toast(`مرحباً ${co.ar}`);
+}
+
+/* ---------------- OWNER: platform dashboard ---------------- */
+function renderAdmin() {
+  const all = db.companies.flatMap(c => c.vehicles.map(v => ({ c, v, st: tripState(v) })));
+  const active = db.companies.filter(c => c.active);
+  const live = all.filter(x => x.c.active && x.st.key === 'enroute');
+  const stat = (n, l, i, c) => `<div class="bg-white/10 rounded-2xl p-3 sm:p-4"><i class="fa-solid ${i} ${c} text-sm"></i><div class="text-2xl font-bold mt-1">${n}</div><div class="text-[11px] text-ink-300">${l}</div></div>`;
+  $('#view').innerHTML = `
+    <section class="fade-in rounded-3xl bg-ink-900 text-white p-5 sm:p-7 mb-6 relative overflow-hidden">
+      <img src="https://images.unsplash.com/photo-1570125909232-eb263c188f7e?auto=format&fit=crop&w=1600&q=70" alt="" loading="lazy" class="absolute inset-y-0 left-0 w-full sm:w-2/3 h-full object-cover opacity-40" onerror="this.remove()" style="-webkit-mask-image:linear-gradient(to left,transparent,#000 70%);mask-image:linear-gradient(to left,transparent,#000 70%)">
+      <div class="relative">
+        <span class="inline-flex items-center gap-1.5 text-[11px] font-bold bg-amber-300 text-ink-900 px-2.5 py-1 rounded-lg mb-3"><i class="fa-solid fa-user-shield"></i>مالك المنصة</span>
+        <h1 class="text-xl sm:text-2xl font-bold mb-1">لوحة إدارة المنصة</h1>
+        <p class="text-sm text-ink-300 mb-5 max-w-xl">تابع كل شركات النقل المشتركة وحافلاتها ورحلاتها من مكان واحد.</p>
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 max-w-3xl">
+          ${stat(db.companies.length, 'شركات مشتركة', 'fa-building', 'text-brand-200')}
+          ${stat(active.length, 'شركات نشطة', 'fa-circle-check', 'text-emerald-300')}
+          ${stat(all.length, 'حافلات وشاشات', 'fa-tv', 'text-amber-300')}
+          ${stat(live.length, 'رحلات جارية الآن', 'fa-route', 'text-emerald-300')}
+        </div>
+      </div>
+    </section>
+
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-bold text-lg">الشركات المشتركة <span class="text-sm font-normal text-ink-500">(${db.companies.length})</span></h2>
+      <button data-action="add-company" class="px-4 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-bold"><i class="fa-solid fa-plus ml-1.5"></i>إضافة شركة</button>
+    </div>
+    <div class="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">${db.companies.map(c => {
+      const n = c.vehicles.length, l = c.vehicles.filter(v => tripState(v).key === 'enroute').length;
+      return `<article class="fade-in bg-white border ${c.active ? 'border-ink-200' : 'border-red-200'} rounded-2xl overflow-hidden flex flex-col">
+        <div class="p-4 flex-1">
+          <div class="flex items-start gap-3 mb-4">
+            <img src="${c.logo}" alt="" class="w-12 h-12 rounded-xl object-cover border border-ink-100 ${c.active ? '' : 'grayscale opacity-60'}">
+            <div class="flex-1 min-w-0"><div class="font-bold truncate">${esc(c.ar)}</div><div class="text-xs text-ink-500 truncate" dir="ltr" style="text-align:right">${esc(c.en)}</div></div>
+            <span class="shrink-0 text-[11px] font-bold px-2 py-1 rounded-lg ${c.active ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}">${c.active ? 'نشطة' : 'موقوفة'}</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="bg-ink-50 rounded-xl py-2"><div class="font-bold">${n}</div><div class="text-[10px] text-ink-500">حافلات</div></div>
+            <div class="bg-ink-50 rounded-xl py-2"><div class="font-bold text-emerald-700">${l}</div><div class="text-[10px] text-ink-500">في الطريق</div></div>
+            <div class="bg-ink-50 rounded-xl py-2"><div class="font-bold text-[13px] leading-6" dir="ltr">${esc(c.user)}</div><div class="text-[10px] text-ink-500">اسم الدخول</div></div>
+          </div>
+          <div class="text-[11px] text-ink-500 mt-3"><i class="fa-regular fa-calendar ml-1"></i>مشتركة منذ <span dir="ltr">${esc(c.since || '')}</span></div>
+        </div>
+        <div class="grid grid-cols-2 border-t border-ink-100">
+          <button data-action="enter-company" data-id="${esc(c.id)}" class="py-3 text-sm font-bold text-brand-700 hover:bg-brand-50"><i class="fa-solid fa-right-to-bracket ml-1.5"></i>فتح لوحتها</button>
+          <button data-action="toggle-company" data-id="${esc(c.id)}" class="py-3 text-sm font-bold border-r border-ink-100 ${c.active ? 'text-red-600 hover:bg-red-50' : 'text-emerald-700 hover:bg-emerald-50'}"><i class="fa-solid ${c.active ? 'fa-pause' : 'fa-play'} ml-1.5"></i>${c.active ? 'إيقاف' : 'تفعيل'}</button>
+        </div>
+      </article>`; }).join('')}</div>
+
+    <h2 class="font-bold text-lg mb-3">الرحلات الجارية الآن على المنصة <span class="text-sm font-normal text-ink-500">(${live.length})</span></h2>
+    <div class="bg-white border border-ink-200 rounded-2xl divide-y divide-ink-100 overflow-hidden mb-6">
+      ${live.length ? live.map(({ c, v, st }) => `<div class="p-3 sm:p-4 flex items-center gap-3">
+        <img src="${c.logo}" alt="" class="w-9 h-9 rounded-lg object-cover shrink-0">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 text-sm font-bold flex-wrap"><span><i class="fa-solid fa-bus text-brand-600 ml-1"></i>${esc(v.code)}</span><span class="text-ink-400 font-normal">•</span><span>${city(v.from).ar}</span><i class="fa-solid fa-arrow-left text-[10px] text-ink-400"></i><span>${city(v.to).ar}</span></div>
+          <div class="text-[11px] text-ink-500 truncate">${esc(c.ar)}</div>
+          <div class="h-1.5 bg-ink-100 rounded-full overflow-hidden mt-1.5 max-w-sm"><div class="h-full bg-emerald-500" style="width:${Math.round(st.pct * 100)}%"></div></div>
+        </div>
+        <div class="text-left shrink-0"><div class="font-bold text-sm" dir="ltr">${hm(st.left)}</div><div class="text-[10px] text-ink-500">متبقي</div></div>
+        <a href="${screenUrl(c, v.code)}" target="_blank" class="w-9 h-9 shrink-0 rounded-lg border border-ink-200 hover:border-brand-500 flex items-center justify-center text-ink-700" title="فتح الشاشة"><i class="fa-solid fa-tv text-sm"></i></a>
+      </div>`).join('') : '<div class="p-6 text-center text-sm text-ink-500">لا توجد رحلات جارية الآن</div>'}
+    </div>
+    <div class="text-center"><button data-action="reset-demo" class="text-xs text-ink-500 hover:text-brand-700"><i class="fa-solid fa-rotate ml-1"></i>إعادة البيانات التجريبية</button></div>`;
+}
+
+/* ---------------- HOME: fleet ---------------- */
+function renderHome() {
+  const co = cur();
+  const counts = { enroute: 0, scheduled: 0, arrived: 0 };
+  co.vehicles.forEach(v => { const k = tripState(v).key; if (counts[k] !== undefined) counts[k]++; });
+  $('#view').innerHTML = `
+    <section class="fade-in rounded-3xl bg-ink-900 text-white p-5 sm:p-7 mb-6 relative overflow-hidden">
+      <i class="fa-solid fa-bus absolute -left-6 -bottom-8 text-[150px] text-white/5"></i>
+      <div class="relative">
+        <h1 class="text-xl sm:text-2xl font-bold mb-1">شاشات الرحلات</h1>
+        <p class="text-sm text-ink-300 mb-5 max-w-xl">أدخل معلومات الرحلة لكل حافلة، واضغط <b class="text-white">Update</b>، فتظهر فوراً على الشاشة داخل الحافلة.</p>
+        <div class="grid grid-cols-3 gap-2 max-w-lg">
+          ${[['في الطريق', counts.enroute, 'text-emerald-300'], ['لم تنطلق', counts.scheduled, 'text-amber-300'], ['وصلت', counts.arrived, 'text-ink-300']].map(([l, n, c]) =>
+            `<div class="bg-white/10 rounded-2xl p-3"><div class="text-2xl font-bold ${c}">${n}</div><div class="text-[11px] text-ink-300">${l}</div></div>`).join('')}
+        </div>
+      </div>
+    </section>
+
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="font-bold text-lg">المركبات <span class="text-sm font-normal text-ink-500">(${co.vehicles.length})</span></h2>
+      <button data-action="add-vehicle" class="px-4 py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-sm font-bold"><i class="fa-solid fa-plus ml-1.5"></i>إضافة مركبة</button>
+    </div>
+    <div class="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">${co.vehicles.length ? '' : '<div class="sm:col-span-2 lg:col-span-4 bg-white border border-dashed border-ink-300 rounded-2xl p-8 text-center text-sm text-ink-500"><i class="fa-solid fa-bus text-3xl text-ink-300 mb-2 block"></i>لا توجد حافلات بعد. اضغط «إضافة مركبة» لإضافة أول حافلة.</div>'}${co.vehicles.map(v => {
+      const st = tripState(v), ui = STATE_UI[st.key], f = city(v.from), t = city(v.to);
+      return `<article class="fade-in bg-white border border-ink-200 rounded-2xl overflow-hidden flex flex-col">
+        <div class="p-4 flex-1">
+          <div class="flex items-center justify-between mb-3">
+            <span class="font-bold text-lg"><i class="fa-solid fa-bus text-brand-600 ml-1.5"></i>${esc(v.code)}</span>
+            <span class="text-[11px] font-bold px-2 py-1 rounded-lg ${ui.cls}"><i class="${ui.icon} ml-1"></i>${ui.ar}</span>
+          </div>
+          <div class="flex items-center gap-2 text-sm font-semibold mb-1"><span>${f.ar}</span><i class="fa-solid fa-arrow-left text-ink-400 text-xs"></i><span>${t.ar}</span></div>
+          <div class="text-xs text-ink-500 mb-3" dir="ltr" style="text-align:right">${f.en} → ${t.en}</div>
+          ${st.key === 'enroute' ? `<div class="h-1.5 bg-ink-100 rounded-full overflow-hidden mb-1.5"><div class="h-full bg-emerald-500 rounded-full" style="width:${Math.round(st.pct * 100)}%"></div></div>
+            <div class="text-[11px] text-ink-500">متبقي للوصول: <b class="text-ink-900" dir="ltr">${hm(st.left)}</b></div>`
+          : st.key === 'scheduled' ? `<div class="text-[11px] text-ink-500">تنطلق بعد: <b class="text-ink-900" dir="ltr">${hm(st.left)}</b></div>`
+          : `<div class="text-[11px] text-ink-500">${v.toDate} • ${v.toTime}</div>`}
+          <div class="text-[11px] text-ink-500 mt-2 truncate"><i class="fa-solid fa-id-card ml-1"></i>${esc(v.driverAr)}</div>
+        </div>
+        <div class="grid grid-cols-2 border-t border-ink-100">
+          <a href="#/edit/${encodeURIComponent(v.code)}" class="py-3 text-center text-sm font-bold text-brand-700 hover:bg-brand-50"><i class="fa-solid fa-pen ml-1.5"></i>تعديل الرحلة</a>
+          <a href="${screenUrl(co, v.code)}" target="_blank" class="py-3 text-center text-sm font-bold text-ink-700 hover:bg-ink-50 border-r border-ink-100"><i class="fa-solid fa-tv ml-1.5"></i>الشاشة</a>
+        </div>
+      </article>`; }).join('')}</div>
+
+    <section class="mt-6 bg-brand-50 border border-brand-100 rounded-2xl p-4 sm:p-5 text-sm text-ink-700 leading-7">
+      <div class="font-bold text-brand-700 mb-1"><i class="fa-solid fa-circle-info ml-1.5"></i>كيف تعمل الشاشة داخل الحافلة؟</div>
+      كل حافلة لها رابط شاشة خاص بها (مثل <span dir="ltr" class="font-mono text-xs bg-white px-1.5 py-0.5 rounded">#/screen/${esc(co.id)}/${esc(co.vehicles[0]?.code || "236")}</span>) يُفتح مرة واحدة على جهاز الشاشة بملء الشاشة.
+      بعدها كل تحديث تحفظه هنا يظهر عليها مباشرة، والعدّ التنازلي يستمر حتى لو انقطع الإنترنت أثناء الطريق.
+    </section>`;
+}
+
+/* ---------------- EDIT: form exactly like the client mock-up ---------------- */
+let previewTimer;
+function renderEdit(code) {
+  const co = cur(), v = veh(code);
+  const cityOpts = sel => Object.entries(CITIES).map(([k, c]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${c.ar} — ${c.en}</option>`).join('');
+  const F = (id, ar, en, inner, span) => `<div dir="rtl" class="field ${span ? 'sm:col-span-2' : ''}"><label for="${id}"><span>${ar}</span><span class="en">${en}</span></label>${inner}</div>`;
+  const I = (id, val, extra = '') => `<input id="${id}" class="inp" value="${esc(val)}" ${extra}>`;
+  $('#view').innerHTML = `
+    <div class="flex items-center gap-2 text-sm text-ink-500 mb-4"><a href="#/" class="hover:text-brand-700"><i class="fa-solid fa-arrow-right ml-1"></i>المركبات</a><span>/</span><span class="text-ink-900 font-semibold">المركبة ${esc(code)}</span></div>
+    <div class="grid lg:grid-cols-5 gap-6 items-start">
+      <form id="tripForm" class="lg:col-span-3 bg-white border border-ink-200 rounded-2xl overflow-hidden fade-in" novalidate>
+        <div class="flex justify-between gap-4 bg-ink-50 border-b border-ink-200 px-5 py-4">
+          <div class="font-bold leading-6">معلومات الرحلة الخاصة بالمركبة رقم<br><span class="text-brand-700 whitespace-nowrap">( ${esc(code)} )</span></div>
+          <div class="font-semibold leading-6 text-ink-500 text-left" dir="ltr">Trip informations for vehicle<br>with number <span class="text-brand-700 whitespace-nowrap">( ${esc(code)} )</span></div>
+        </div>
+        <div class="p-5 grid sm:grid-cols-2 gap-x-5 gap-y-4" dir="ltr">
+          ${F('fFrom', 'نقطة البداية', 'Starting point', `<select id="fFrom" class="inp">${cityOpts(v.from)}</select>`)}
+          ${F('fTo', 'نقطة النهاية', 'Destination', `<select id="fTo" class="inp">${cityOpts(v.to)}</select>`)}
+          ${F('fFromD', 'من تاريخ', 'From date', `<div class="inp dt" dir="ltr"><input id="fFromD" type="date" class="flex-[3]" value="${v.fromDate}"><span class="sep"></span><input id="fFromT" type="time" class="flex-[2]" value="${v.fromTime}" aria-label="From time"></div>`)}
+          ${F('fToD', 'إلى تاريخ', 'To date', `<div id="toBox" class="inp dt" dir="ltr"><input id="fToD" type="date" class="flex-[3]" value="${v.toDate}"><span class="sep"></span><input id="fToT" type="time" class="flex-[2]" value="${v.toTime}" aria-label="To time"></div>
+            <p id="dateErr" class="hidden text-xs text-red-600 mt-1"><i class="fa-solid fa-circle-exclamation ml-1"></i>وقت الوصول يجب أن يكون بعد وقت الانطلاق</p>`)}
+          ${F('fDrEn', 'اسم السائق باللغة الإنجليزية', 'Driver name in English', I('fDrEn', v.driverEn, 'dir="ltr"'))}
+          ${F('fDrAr', 'اسم السائق باللغة العربية', 'Driver name in Arabic', I('fDrAr', v.driverAr))}
+          ${F('fAsEn', 'اسم السائق المساعد باللغة الإنجليزية', 'Assistant driver name in English', I('fAsEn', v.asstEn, 'dir="ltr"'))}
+          ${F('fAsAr', 'اسم السائق المساعد باللغة العربية', 'Assistant driver name in Arabic', I('fAsAr', v.asstAr))}
+          ${F('fCode', 'رقم المركبة', 'Car Code', I('fCode', v.code, 'dir="ltr" readonly style="background:#f8fafc"'))}
+          ${F('fCard', 'كرت التشغيل', 'Operation card', I('fCard', v.card, 'dir="ltr" inputmode="numeric"'))}
+          ${F('fTel', 'رقم التواصل', 'Contact No', I('fTel', v.contact, 'dir="ltr" type="tel"'))}
+          ${F('fTrip', 'رقم الرحلة', 'Trip No', I('fTrip', v.tripNo, 'dir="ltr"'))}
+          ${F('fPer', 'بشكل دوري', 'Periodically', `<select id="fPer" class="inp" dir="ltr"><option value="no" ${v.periodic !== 'yes' ? 'selected' : ''}>No</option><option value="yes" ${v.periodic === 'yes' ? 'selected' : ''}>Yes</option></select>`)}
+          ${F('fLogo', 'الشعار', 'Logo', `<div class="flex items-center gap-3"><img id="logoPrev" src="${co.logo}" class="w-12 h-12 rounded-xl object-cover border border-ink-200" alt="الشعار">
+            <label class="px-3 py-2 rounded-xl border border-ink-200 hover:border-brand-500 text-xs font-bold cursor-pointer">تغيير الشعار<input id="fLogo" type="file" accept="image/*" class="hidden"></label></div>`)}
+        </div>
+        <div class="flex items-center justify-between gap-3 px-5 py-4 border-t border-ink-100 bg-ink-50" dir="ltr">
+          <span id="dirty" dir="rtl" class="text-xs text-ink-500"><i class="fa-regular fa-clock ml-1"></i>آخر تحديث: ${new Date(v.updated).toLocaleString('ar-u-nu-latn', { hour:'2-digit', minute:'2-digit', day:'numeric', month:'short' })}</span>
+          <button class="px-7 py-3 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-bold shadow-lg shadow-brand-600/25" dir="ltr">Update <span class="font-normal opacity-80">| تحديث</span></button>
+        </div>
+      </form>
+
+      <aside class="lg:col-span-2 lg:sticky lg:top-24 fade-in">
+        <div class="flex items-center justify-between mb-2">
+          <div class="text-sm font-bold"><i class="fa-solid fa-tv text-brand-600 ml-1.5"></i>معاينة شاشة الحافلة</div>
+          <span class="text-[11px] text-emerald-700 font-semibold"><span class="inline-block w-2 h-2 rounded-full bg-emerald-500 pulse-dot ml-1"></span>مباشر</span>
+        </div>
+        <div class="rounded-2xl bg-ink-900 p-2 shadow-xl"><div id="mini" class="relative w-full overflow-hidden rounded-xl" style="aspect-ratio:16/9"></div></div>
+        <p class="text-xs text-ink-500 mt-2 leading-6">المعاينة تتغير أثناء الكتابة. بعد الضغط على <b>Update</b> تتحدث شاشة الحافلة الحقيقية.</p>
+        <a href="${screenUrl(co, code)}" target="_blank" class="mt-3 w-full inline-flex items-center justify-center gap-2 py-3 rounded-xl bg-ink-900 hover:bg-ink-800 text-white text-sm font-bold"><i class="fa-solid fa-up-right-from-square"></i>فتح شاشة الحافلة ${esc(code)} في نافذة جديدة</a>
+        <p class="text-[11px] text-ink-500 mt-2 text-center">جرّب: افتح الشاشة في نافذة، عدّل هنا واضغط Update، وشاهد التحديث الفوري.</p>
+      </aside>
+    </div>`;
+
+  let logo = co.logo;
+  const collect = () => ({ code, from: $('#fFrom').value, to: $('#fTo').value, fromDate: $('#fFromD').value, fromTime: $('#fFromT').value,
+    toDate: $('#fToD').value, toTime: $('#fToT').value, driverAr: $('#fDrAr').value.trim(), driverEn: $('#fDrEn').value.trim(),
+    asstAr: $('#fAsAr').value.trim(), asstEn: $('#fAsEn').value.trim(), card: $('#fCard').value.trim(), contact: $('#fTel').value.trim(),
+    tripNo: $('#fTrip').value.trim(), periodic: $('#fPer').value });
+  const mini = $('#mini');
+  const drawMini = () => {
+    const d = collect(); mini.innerHTML = `<div style="width:1600px;height:900px;transform-origin:top right;position:absolute;top:0;right:0">${screenHTML(d, Object.assign({}, co, { logo }), true)}</div>`;
+    const sc = mini.clientWidth / 1600; mini.firstChild.style.transform = `scale(${sc})`;
+    paintCountdown(mini, d); drawMap(mini.querySelector('.map'), d, true);
+  };
+  drawMini();
+  const ro = new ResizeObserver(() => { const f = mini.firstChild; if (f) f.style.transform = `scale(${mini.clientWidth / 1600})`; }); ro.observe(mini);
+  let t; $('#tripForm').addEventListener('input', () => { $('#dirty').innerHTML = '<span class="text-amber-700 font-semibold"><i class="fa-solid fa-pen ml-1"></i>تعديلات غير محفوظة</span>'; clearTimeout(t); t = setTimeout(drawMini, 250); });
+  $('#tripForm').addEventListener('change', drawMini);
+  clearInterval(previewTimer); previewTimer = setInterval(() => { if (!document.body.contains(mini)) return clearInterval(previewTimer); paintCountdown(mini, collect()); }, 1000);
+  $('#fLogo').onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    if (f.size > 1.5e6) return toast('الصورة كبيرة، اختر شعاراً أقل من 1.5MB', 'fa-triangle-exclamation', 'text-red-300');
+    const r = new FileReader(); r.onload = () => { logo = r.result; $('#logoPrev').src = logo; drawMini(); }; r.readAsDataURL(f);
+  };
+  $('#tripForm').onsubmit = e => {
+    e.preventDefault();
+    const d = collect(), okDates = at(d.toDate, d.toTime) > at(d.fromDate, d.fromTime);
+    $('#dateErr').classList.toggle('hidden', okDates); $('#toBox').classList.toggle('err', !okDates);
+    const req = ['fDrAr', 'fDrEn', 'fTrip']; let bad = null;
+    req.forEach(id => { const ok = $('#' + id).value.trim().length > 0; $('#' + id).classList.toggle('err', !ok); if (!ok && !bad) bad = id; });
+    if (d.from === d.to) { $('#fTo').classList.add('err'); return toast('نقطة البداية والنهاية متطابقتان', 'fa-triangle-exclamation', 'text-red-300'); }
+    $('#fTo').classList.remove('err');
+    if (!okDates) { $('#fToD').focus(); return; }
+    if (bad) { $('#' + bad).focus(); return toast('أكمل الحقول المطلوبة', 'fa-triangle-exclamation', 'text-red-300'); }
+    Object.assign(v, d, { updated: Date.now() }); co.logo = logo; save(code); renderHeader();
+    $('#dirty').innerHTML = '<span class="text-emerald-700 font-semibold"><i class="fa-solid fa-check ml-1"></i>تم التحديث — ظهر على شاشة الحافلة الآن</span>';
+    toast(`تم تحديث شاشة الحافلة ${code}`, 'fa-tv');
+  };
+}
+
+/* ---------------- SCREEN (shared renderer) ---------------- */
+function screenHTML(v, co, mini) {
+  const f = city(v.from), t = city(v.to);
+  const durMs = at(v.toDate, v.toTime) - at(v.fromDate, v.fromTime);
+  const row = (en, val, ar, big) => `<div class="grid items-center" style="grid-template-columns:200px 1fr 170px;min-height:${big ? 62 : 46}px">
+      <div class="lbl-en" style="font-size:22px;color:#cbd5e1;text-align:left">${en}</div>
+      <div style="text-align:center;color:#fff;font-weight:600;font-size:${big ? 20 : 23}px;line-height:1.25">${val}</div>
+      <div class="lbl-ar" style="font-size:22px;color:#cbd5e1;text-align:right;direction:rtl">${ar}</div></div>`;
+  const side = (labelEn, labelAr, c, date, time) => `
+    <div style="display:grid;grid-template-columns:120px 1fr 110px;row-gap:26px;align-items:center;width:560px">
+      <div class="lbl-en" style="font-size:26px;text-align:left">${labelEn}</div>
+      <div style="text-align:center"><div style="font-size:24px;font-weight:600">${esc(c.ar)}</div><div style="font-size:26px;font-weight:600;direction:ltr">${esc(c.en)}</div></div>
+      <div class="lbl-ar" style="font-size:26px;text-align:right;direction:rtl">${labelAr}</div>
+      <div class="lbl-en" style="font-size:26px;text-align:left">Date:</div><div style="text-align:center;font-size:28px;font-weight:600;direction:ltr">${esc(date)}</div><div class="lbl-ar" style="font-size:26px;text-align:right;direction:rtl">التاريخ:</div>
+      <div class="lbl-en" style="font-size:26px;text-align:left">Time:</div><div style="text-align:center;font-size:28px;font-weight:600;direction:ltr">${esc(time)}</div><div class="lbl-ar" style="font-size:26px;text-align:right;direction:rtl">الوقت:</div>
+    </div>`;
+  return `<div class="scr">
+    <div style="position:absolute;inset:0;background:radial-gradient(900px 300px at 50% 0%,rgba(255,255,255,.7),transparent)"></div>
+    <!-- header -->
+    <div style="position:relative;height:150px;direction:ltr;display:grid;grid-template-columns:1fr 260px 1fr;align-items:center;padding:0 60px">
+      <div style="direction:ltr;text-align:left;font-size:30px;font-weight:700;color:#1e293b;line-height:1.2">${esc(co.en)}</div>
+      <div style="display:flex;justify-content:center"><div style="width:200px;height:110px;background:#fff;border-radius:16px;display:flex;align-items:center;justify-content:center;box-shadow:0 8px 24px rgba(15,23,42,.12)">
+        <img src="${co.logo}" alt="" style="max-width:170px;max-height:88px;object-fit:contain"></div></div>
+      <div style="direction:rtl;text-align:right;font-size:32px;font-weight:700;color:#1e293b;line-height:1.2">${esc(co.ar)}</div>
+    </div>
+    <!-- info panel -->
+    <div style="position:relative;margin:0 46px;height:390px;background:linear-gradient(180deg,#1f2937,#111827);border-radius:24px;display:flex;direction:ltr;padding:24px;gap:30px;box-shadow:0 20px 50px rgba(15,23,42,.35)">
+      <div class="map" style="width:470px;height:342px;border-radius:14px;overflow:hidden;flex-shrink:0;background:#dbe4ee;position:relative"></div>
+      <div style="flex:1;display:flex;flex-direction:column;justify-content:center;direction:ltr">
+        ${row('Driver 1:', `<div style="direction:rtl">${esc(v.driverAr)}</div><div style="direction:ltr">${esc(v.driverEn)}</div>`, 'السائق 1:', true)}
+        ${row('Driver 2:', `<div style="direction:rtl">${esc(v.asstAr)}</div><div style="direction:ltr">${esc(v.asstEn)}</div>`, 'السائق 2:', true)}
+        ${row('Bus No:', `<span dir="ltr">${esc(v.code)}</span>`, 'رقم الحافلة:')}
+        ${row('Trip No:', `<span dir="ltr">${esc(v.tripNo)}</span>`, 'رقم الرحلة:')}
+        ${row('Trip Duration:', `<span dir="ltr">${durMs > 0 ? hm(durMs) : '--:--'}</span>`, 'مدة الرحلة:')}
+        ${row('Contact Us:', `<span dir="ltr">${esc(v.contact)}</span>`, 'للتواصل:')}
+      </div>
+    </div>
+    <!-- bottom: from / countdown / to -->
+    <div style="position:relative;display:flex;align-items:center;justify-content:space-between;direction:ltr;padding:26px 70px 0">
+      ${side('To:', 'إلى:', t, v.toDate, v.toTime)}
+      <div class="cd" style="display:flex;flex-direction:column;align-items:center;width:260px">
+        <svg width="170" height="170" viewBox="0 0 170 170"><circle cx="85" cy="85" r="72" fill="#fff" stroke="#fff" stroke-width="8"/>
+          <circle cx="85" cy="85" r="76" fill="#fff"/><circle cx="85" cy="85" r="68" fill="#f1f5f9"/>
+          <circle class="ring-fill" cx="85" cy="85" r="34" fill="none" stroke="#4ade80" stroke-width="68" stroke-dasharray="213.6" stroke-dashoffset="213.6" transform="rotate(-90 85 85)"/></svg>
+        <div class="cd-time" style="font-size:34px;font-weight:700;color:#16a34a;margin-top:4px;direction:ltr"></div>
+        <div class="cd-ar" style="font-size:22px;font-weight:600;color:#334155;direction:rtl"></div>
+        <div class="cd-en" style="font-size:20px;font-weight:600;color:#475569"></div>
+      </div>
+      ${side('From:', 'من:', f, v.fromDate, v.fromTime)}
+    </div>
+  </div>`;
+}
+function paintCountdown(root, v) {
+  const st = tripState(v), C = 213.6;
+  const ring = root.querySelector('.ring-fill'); if (!ring) return;
+  const set = (pct, time, ar, en, color) => {
+    ring.style.strokeDashoffset = (C * (1 - pct)).toFixed(1); ring.setAttribute('stroke', color);
+        const tt = root.querySelector('.cd-time'); tt.textContent = time; tt.style.color = color === '#4ade80' ? '#16a34a' : color;
+    root.querySelector('.cd-ar').textContent = ar; root.querySelector('.cd-en').textContent = en;
+  };
+  if (st.key === 'enroute') set(st.pct, hm(st.left), 'الوقت المتبقي للوصول', 'Time to destination', '#4ade80');
+  else if (st.key === 'scheduled') set(0, hm(st.left), 'الوقت المتبقي للانطلاق', 'Time to departure', '#f59e0b');
+  else if (st.key === 'arrived') set(1, '00:00', 'وصلنا بحمد الله — حمداً على السلامة', 'Arrived — Welcome', '#2563eb');
+  else set(0, '--:--', 'تحقق من تواريخ الرحلة', 'Check trip dates', '#dc2626');
+}
+
+/* Map: Leaflet + OpenStreetMap, with an offline SVG fallback */
+const maps = new WeakMap();
+function routePoints(v) {
+  const key = `${v.from}-${v.to}`, rev = `${v.to}-${v.from}`;
+  let via = VIA[key] || (VIA[rev] ? [...VIA[rev]].reverse() : []);
+  return [v.from, ...via, v.to].map(k => city(k).ll).filter(Boolean);
+}
+function drawMap(el, v, mini) {
+  if (!el) return;
+  const pts = routePoints(v); if (pts.length < 2) return;
+  if (window.L) {
+    try {
+      let m = maps.get(el);
+      if (!m) {
+        m = L.map(el, { zoomControl: false, attributionControl: true, dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false });
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 12, attribution: '© OpenStreetMap' }).addTo(m);
+        maps.set(el, m);
+      }
+      m.eachLayer(l => { if (!(l instanceof L.TileLayer)) m.removeLayer(l); });
+      L.polyline(pts, { color: '#ffffff', weight: 9, opacity: .9 }).addTo(m);
+      L.polyline(pts, { color: '#2563eb', weight: 5 }).addTo(m);
+      const dot = (ll, c) => L.circleMarker(ll, { radius: 8, color: '#fff', weight: 3, fillColor: c, fillOpacity: 1 }).addTo(m);
+      dot(pts[0], '#16a34a'); dot(pts[pts.length - 1], '#dc2626');
+      const st = tripState(v);
+      if (st.key === 'enroute') { const p = along(pts, st.pct); L.circleMarker(p, { radius: 11, color: '#fff', weight: 4, fillColor: '#f59e0b', fillOpacity: 1 }).addTo(m); }
+      m.invalidateSize(); m.fitBounds(L.latLngBounds(pts).pad(0.25), { animate: false });
+      return;
+    } catch (e) { /* fall through to SVG */ }
+  }
+  el.innerHTML = svgMap(pts, v);
+}
+function along(pts, f) {
+  const seg = []; let tot = 0;
+  for (let i = 1; i < pts.length; i++) { const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]); seg.push(d); tot += d; }
+  let goal = tot * Math.min(1, Math.max(0, f));
+  for (let i = 0; i < seg.length; i++) { if (goal <= seg[i]) { const r = goal / seg[i]; return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * r, pts[i][1] + (pts[i + 1][1] - pts[i][1]) * r]; } goal -= seg[i]; }
+  return pts[pts.length - 1];
+}
+function svgMap(pts, v) {
+  const la = pts.map(p => p[0]), lo = pts.map(p => p[1]);
+  const pad = 1.5, minLa = Math.min(...la) - pad, maxLa = Math.max(...la) + pad, minLo = Math.min(...lo) - pad, maxLo = Math.max(...lo) + pad;
+  const W = 470, H = 342, s = Math.min(W / (maxLo - minLo), H / (maxLa - minLa));
+  const X = l => (l - minLo) * s + (W - (maxLo - minLo) * s) / 2, Y = l => H - ((l - minLa) * s + (H - (maxLa - minLa) * s) / 2);
+  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p[1]).toFixed(1)},${Y(p[0]).toFixed(1)}`).join(' ');
+  const labels = [v.from, v.to].map((k, i) => { const c = city(k), p = c.ll; return `<g><circle cx="${X(p[1])}" cy="${Y(p[0])}" r="8" fill="${i ? '#dc2626' : '#16a34a'}" stroke="#fff" stroke-width="3"/>
+    <text x="${X(p[1]) + 12}" y="${Y(p[0]) + 5}" font-size="15" font-weight="700" fill="#0f172a" font-family="IBM Plex Sans Arabic">${c.en}</text></g>`; }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="100%"><rect width="${W}" height="${H}" fill="#cfe0ee"/>
+    <path d="M0 ${H * .15} Q ${W * .4} ${H * .3} ${W * .55} ${H} L 0 ${H} Z" fill="#a9c9e2" opacity=".6"/>
+    <path d="${path}" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="${path}" fill="none" stroke="#2563eb" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>${labels}</svg>`;
+}
+
+/* ---------------- FULL SCREEN MODE ---------------- */
+let scrTimer, scrCode, scrCo, toolsTimer;
+function startScreen(cid, code) {
+  scrCo = cid; scrCode = code; const stage = $('#stage');
+  const draw = () => { const co = company(scrCo), v = co && veh(scrCode, co); if (!v) return;
+    if (!co.active) { stage.innerHTML = `<div class="scr" style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center"><img src="${co.logo}" style="width:120px;height:120px;border-radius:28px;filter:grayscale(1);opacity:.6"><div style="font-size:40px;font-weight:700">الخدمة متوقفة مؤقتاً</div><div style="font-size:30px;font-weight:600;color:#475569;direction:ltr">Service temporarily unavailable</div></div>`; return; }
+    stage.innerHTML = screenHTML(v, co, false); paintCountdown(stage, v); drawMap(stage.querySelector('.map'), v, false); };
+  const fit = () => { const s = Math.min(innerWidth / 1600, innerHeight / 900) * 0.98; stage.style.transform = `scale(${s})`; };
+  draw(); fit(); window.onresize = fit;
+  scrTimer = setInterval(() => { const co = company(scrCo), v = co && co.active && veh(scrCode, co); if (v) paintCountdown(stage, v); }, 1000);
+  startScreen.redraw = draw;
+  // hide tools after a few seconds (kiosk look)
+  const tools = $('#scrTools'); const showTools = () => { tools.style.opacity = 1; clearTimeout(toolsTimer); toolsTimer = setTimeout(() => tools.style.opacity = 0, 3500); };
+  showTools(); $('#screenWrap').onmousemove = showTools; $('#screenWrap').ontouchstart = showTools;
+}
+function stopScreen() { clearInterval(scrTimer); scrCode = null; window.onresize = null; }
+function syncFromStorage() {
+  db = store.get('rihla_db3', db); session = store.get('rihla_session', session);
+  if (scrCode) { startScreen.redraw && startScreen.redraw(); toastScreen(); }
+  else if (!location.hash.startsWith('#/edit')) route(true);
+}
+function toastScreen() {
+  const n = document.createElement('div');
+  n.style.cssText = 'position:fixed;top:18px;right:18px;z-index:60;background:#16a34a;color:#fff;padding:10px 16px;border-radius:12px;font:600 14px IBM Plex Sans Arabic,sans-serif;box-shadow:0 10px 30px rgba(0,0,0,.4)';
+  n.innerHTML = '<i class="fa-solid fa-rotate ml-1.5"></i>تم تحديث معلومات الرحلة'; document.body.appendChild(n); setTimeout(() => n.remove(), 2500);
+}
+window.addEventListener('storage', e => { if (e.key === 'rihla_db3') syncFromStorage(); });
+if (bc) bc.onmessage = () => syncFromStorage();
+
+/* ---------------- MODALS ---------------- */
+function modal(html) { $('#modalBox').innerHTML = html; $('#modal').classList.replace('hidden', 'flex'); }
+function closeModal() { $('#modal').classList.replace('flex', 'hidden'); }
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-action]'); if (!t) return;
+  const a = t.dataset.action;
+  if (a === 'close-modal') closeModal();
+  else if (a === 'fullscreen') { const el = document.documentElement; (document.fullscreenElement ? document.exitFullscreen() : el.requestFullscreen && el.requestFullscreen())?.catch?.(() => {}); }
+  else if (a === 'add-vehicle') {
+    modal(`<h3 class="font-bold text-lg mb-1">إضافة مركبة</h3><p class="text-sm text-ink-500 mb-4">ستحصل المركبة على شاشة خاصة بها.</p>
+      <form id="addForm"><label class="text-sm font-semibold block mb-1.5" for="newCode">رقم المركبة</label>
+      <input id="newCode" class="inp mb-1" dir="ltr" placeholder="مثال: 410" inputmode="numeric"><p id="codeErr" class="hidden text-xs text-red-600 mb-2"></p>
+      <div class="flex gap-2 mt-4"><button class="flex-1 py-3 rounded-xl bg-brand-600 text-white font-bold">إضافة</button><button type="button" data-action="close-modal" class="px-5 rounded-xl bg-ink-100 font-bold">إلغاء</button></div></form>`);
+    setTimeout(() => $('#newCode').focus(), 50);
+    $('#addForm').onsubmit = ev => { ev.preventDefault(); const c = $('#newCode').value.trim(), err = $('#codeErr');
+      if (!/^[\w-]{1,10}$/.test(c)) { err.textContent = 'اكتب رقماً صحيحاً (حروف وأرقام فقط)'; return err.classList.remove('hidden'); }
+      const co = cur(); if (veh(c)) { err.textContent = 'هذه المركبة موجودة بالفعل'; return err.classList.remove('hidden'); }
+      const now = new Date(), e2 = new Date(now.getTime() + 8 * 36e5);
+      co.vehicles.push({ code: c, from:'jeddah', to:'madinah', fromDate: toLocal(now), fromTime: toTime(now), toDate: toLocal(e2), toTime: toTime(e2), driverAr:'', driverEn:'', asstAr:'', asstEn:'', card:'', tripNo:'', contact: co.vehicles[0]?.contact || '', periodic:'no', updated: Date.now() });
+      save(c); closeModal(); location.hash = '#/edit/' + encodeURIComponent(c); toast('أُضيفت المركبة — أدخل معلومات رحلتها'); };
+  }
+  else if (a === 'settings') {
+    const co = cur();
+    modal(`<h3 class="font-bold text-lg mb-4">إعدادات الشركة</h3><form id="coForm" class="space-y-3">
+      <div class="field"><label for="coAr"><span>اسم الشركة بالعربية</span></label><input id="coAr" class="inp" value="${esc(co.ar)}"></div>
+      <div class="field"><label for="coEn"><span>اسم الشركة بالإنجليزية</span></label><input id="coEn" class="inp" dir="ltr" value="${esc(co.en)}"></div>
+      <div class="flex gap-2 pt-2"><button class="flex-1 py-3 rounded-xl bg-brand-600 text-white font-bold">حفظ</button><button type="button" data-action="close-modal" class="px-5 rounded-xl bg-ink-100 font-bold">إلغاء</button></div></form>`);
+    $('#coForm').onsubmit = ev => { ev.preventDefault(); co.ar = $('#coAr').value.trim() || co.ar; co.en = $('#coEn').value.trim() || co.en; save('*'); closeModal(); route(true); toast('حُفظت إعدادات الشركة'); };
+  }
+  else if (a === 'logout') { setSession(null); location.hash = '#/'; route(); }
+  else if (a === 'demo-login') { login(t.dataset.u, '1234'); }
+  else if (a === 'enter-company') { const c = company(t.dataset.id); setSession({ role: 'owner', cid: c.id }); location.hash = '#/'; route(); toast(`تتصفح الآن لوحة ${c.ar}`, 'fa-user-shield'); }
+  else if (a === 'exit-company') { setSession({ role: 'owner' }); location.hash = '#/admin'; route(); }
+  else if (a === 'toggle-company') { const c = company(t.dataset.id); c.active = !c.active; save('*'); route(true); toast(c.active ? `تم تفعيل ${c.ar}` : `تم إيقاف ${c.ar} — شاشاتها تعرض «الخدمة متوقفة»`, c.active ? 'fa-play' : 'fa-pause', c.active ? 'text-emerald-400' : 'text-amber-300'); }
+  else if (a === 'reset-demo') { db = seed(); save('*'); route(true); toast('أُعيدت البيانات التجريبية', 'fa-rotate'); }
+  else if (a === 'add-company') {
+    modal(`<h3 class="font-bold text-lg mb-1">إضافة شركة نقل</h3><p class="text-sm text-ink-500 mb-4">تحصل الشركة على حساب دخول خاص ولوحة لحافلاتها.</p>
+      <form id="acForm" class="space-y-3" novalidate>
+      <div class="field"><label for="acAr"><span>اسم الشركة بالعربية</span></label><input id="acAr" class="inp" placeholder="مثال: شركة الوفاء للنقل"></div>
+      <div class="field"><label for="acEn"><span>اسم الشركة بالإنجليزية</span></label><input id="acEn" class="inp" dir="ltr" placeholder="Al-Wafa Transport"></div>
+      <div class="grid grid-cols-2 gap-3"><div class="field"><label for="acUser"><span>اسم الدخول</span></label><input id="acUser" class="inp" dir="ltr" placeholder="wafa"></div>
+      <div class="field"><label for="acPass"><span>كلمة المرور</span></label><input id="acPass" class="inp" dir="ltr" value="${Math.floor(1000 + Math.random() * 9000)}"></div></div>
+      <p id="acErr" class="hidden text-xs text-red-600"></p>
+      <div class="flex gap-2 pt-2"><button class="flex-1 py-3 rounded-xl bg-brand-600 text-white font-bold">إضافة الشركة</button><button type="button" data-action="close-modal" class="px-5 rounded-xl bg-ink-100 font-bold">إلغاء</button></div></form>`);
+    setTimeout(() => $('#acAr').focus(), 50);
+    $('#acForm').onsubmit = ev => { ev.preventDefault();
+      const ar = $('#acAr').value.trim(), en = $('#acEn').value.trim(), u = $('#acUser').value.trim().toLowerCase(), pw = $('#acPass').value.trim(), err = $('#acErr');
+      const bad = m => { err.textContent = m; err.classList.remove('hidden'); };
+      if (!ar || !en) return bad('اكتب اسم الشركة بالعربية والإنجليزية');
+      if (!/^[a-z0-9_-]{3,20}$/.test(u)) return bad('اسم الدخول: 3 أحرف إنجليزية أو أرقام على الأقل');
+      if (u === PLATFORM.owner.user || db.companies.some(c => c.user === u || c.id === u)) return bad('اسم الدخول مستخدم من قبل');
+      if (pw.length < 4) return bad('كلمة المرور 4 أحرف على الأقل');
+      db.companies.push({ id: u, ar, en, logo: monogram(ar), user: u, pass: pw, active: true, since: toLocal(new Date()), vehicles: [] });
+      save('*'); closeModal(); route(true); toast(`أُضيفت ${ar} — بيانات الدخول: ${u} / ${pw}`); };
+  }
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+/* ---------------- INIT ---------------- */
+route();
+setInterval(() => { if (!scrCode && session && !location.hash.startsWith('#/edit') && !$('#modal').classList.contains('flex')) route(true); }, 30000);
+</script>
+</body>
+</html>
